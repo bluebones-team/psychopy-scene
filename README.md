@@ -1,17 +1,36 @@
 # PsychoPy-Scene
 
-本项目是基于 [PsychoPy](https://github.com/psychopy/psychopy) 的轻量级绘制框架，**核心源码 <300 行**。
+![PyPI - Version](https://img.shields.io/pypi/v/psychopy-scene)
+![PyPI - Downloads](https://img.shields.io/pypi/dm/psychopy-scene)
 
-## 实验上下文
+English | [简体中文](README-zh.md)
 
-实验上下文 `Context` 表示实验的全局参数，包括环境参数、任务参数等。
-编写实验的第一步，就是创建实验上下文。
+This repo is a lightweight experiment framework for [PsychoPy](https://github.com/psychopy/psychopy), source code **<300 lines**.
+
+## Features
+
+- Lightweight: Only 1 file, no extra dependencies
+- Type-safe: All parameters are type annotated
+- Newcomer-friendly: Only the concepts of `Context` and `Scene` are required to get started.
+
+## Install
+
+```bash
+pip install psychopy-scene
+```
+
+## Usage
+
+### Context
+
+Experiment context `Context` means this experiment's global settings,
+including environment parameters, task parameters, and so on.
+The first step to writing an experiment is to create an experiment context.
 
 ```python
-from exp import Context
+from psychopy_scene import Context
 from psychopy.visual import Window
 from psychopy.monitors import Monitor
-from psychopy.data import StairHandler
 
 # create monitor
 monitor = Monitor(
@@ -30,72 +49,91 @@ win = Window(
 )
 
 # create experiment context
-ctx = Context(
-    win,
-    handler=StairHandler(),
-)
+ctx = Context(win)
 ```
 
-## 基本用法
+### Scene
 
-实验任务可以被当作一系列画面 `Scene` 的组合，每个画面实现了 2 个功能：
+The experiment can be seen as a composition of a series of scenes `Scene`,
+only 2 steps are required to write an experiment program:
 
-- 绘制刺激：根据参数绘制若干个刺激。
-- 处理交互：监听按键、鼠标点击等事件，并对这些事件进行处理。
+1. create scene
+2. write scene presentation logic
 
-> 接下来的示例将省略实验上下文的创建，直接展示如何编写任务。
-
-画面采用链式调用（method chaining）模式进行配置。
-`duraion` 方法设置持续时间，`close_on` 方法设置关闭画面的按键：
+we can pass several stimuli to be drawn directly into
+the `Scene` method, and these stimuli will be drawn automatically:
 
 ```python
 from psychopy.visual import TextStim
 
 # create stimulus
-stim = TextStim(win, text="")
+stim_1 = TextStim(win, text="Hello")
+stim_2 = TextStim(win, text="World")
 # create scene
-scene = ctx.Scene().duration(1).close_on("f", 'j')
+scene = ctx.Scene(stim_1, stim_2)
 # show scene
 scene.show()
 ```
 
-对于静态刺激的绘制，我们可能只关心要绘制什么内容，而不需要逐帧更新刺激参数。
-所以我们可以直接把需要绘制的刺激传入 `Scene` 方法中，这样刺激将被自动绘制：
+The scene has 2 configuration methods, each method should be called once.
+`duration` method sets the duration of the scene,
+`close_on` method sets the [keys](#keys) to close the scene,
 
 ```python
-from psychopy.visual import TextStim
-
-stim = TextStim(win, text="")
-scene = ctx.Scene(stim)
-scene.show()
+scene = ctx.Scene(stim).duration(1).close_on("f", 'j')
 ```
 
-通常我们需要在多个画面之间共享同一种刺激（文本），但是每个画面的内容又不同。
-所以我们希望在画面首次绘制前设置刺激参数，而不是为每个画面都新建一个刺激。
-这时，我们可以使用 `hook` 装饰器在 `setup` 阶段添加 [生命周期](#生命周期) 钩子，
-被装饰的函数将在画面首次绘制前执行：
+The duration of some scenes isn't fixed,
+so we can set its duration dynamically by [state management](#state-management):
 
 ```python
-from psychopy.visual import TextStim
+scene = ctx.Scene(stim).duration()
+scene.show(duration=1)
+```
 
-stim = TextStim(win, text="")
+> [!CAUTION]
+> error example of configuring scene:
+>
+> ```python
+> scene = ctx.Scene(stim).duration(1).duration(2)
+> ```
+>
+> ```python
+> scene_1 = ctx.Scene(stim).duration(1)
+> scene_2 = scene_1.close_on("f", 'j')
+> ```
 
+Different scenes may draw the same type of stimulus,
+such as guide and end scenes need to draw text stimulus.
+In this case, we only need to create 1 text stimulus,
+then use the `hook` method to add a custom function to a specific stage of the scene,
+this function is named [lifecycle](#lifecycle) hook.
+In the following example,
+the guide and end scenes will show different text,
+but they use the same stimulus. Because the hook is added to the `setup` stage will be called before the first draw.
+
+```python
 # this is equivalent to:
-# scene = ctx.Scene(stim).hook('setup')(lambda: stim.text = "Welcome to the experiment")
+# guide = ctx.Scene(stim).hook('setup')(lambda: stim.text = "Welcome to the experiment")
 @(ctx.Scene(stim).hook('setup'))
-def scene():
+def guide():
+    # change stimulus parameters before first drawing
     stim.text = "Welcome to the experiment"
 
-scene.show()
+@(ctx.Scene(stim).hook('setup'))
+def end():
+    # change stimulus parameters again, becasue this scene will show another text
+    stim.text = "Thanks for your participation"
+
+guide.show()
+end.show()
 ```
 
-同样，如果我们需要逐帧改变刺激参数（绘制动态刺激），可以在 `frame` 阶段添加生命周期钩子：
+In this way, we can draw stimlus flexibly.
+if we want to draw dynamic stimuli, just add a lifecycle hook to the `frame` stage:
 
 ```python
 from psychopy import core
-from psychopy.visual import TextStim
-
-stim = TextStim(win, text="")
 
 @(ctx.Scene(stim).hook('frame'))
 def scene():
@@ -104,53 +142,54 @@ def scene():
 scene.show()
 ```
 
-## 状态管理
+### State Management
 
-大部分情况下，我们并不能一开始就决定刺激参数，而是需要在运行时根据条件动态地设置。
-这时，我们可以将这类和画面绘制相关的动态数据作为画面的 **状态**：
+Always, we need to show a series of scenes with the same type of stimulus but different content.
+In this case, we can use these kinds of parameters that will be changed
+in each show as the **state** of the scene:
 
 ```python
-from psychopy.visual import TextStim
-
-stim = TextStim(win, text="")
-
 @(ctx.Scene(stim).duration(0.1).hook('setup'))
 def scene():
     stim.text = scene.get("text") # get `text` state
 
-for instensity in ['hello', 'world', 'goodbye']:
+for instensity in ['A', 'B', 'C']:
     scene.show(text=instensity) # set `text` state and show
 ```
 
-需要注意的是，`show` 方法在其初始化阶段 **重置状态**，详见 [渲染时机](#渲染时机)。
-所以，应该通过 `show` 设置初始状态，并在 `show` 执行后获取状态。
+> [!NOTE]
+> the `show` method will **reset state** during
+> its initialization phase at each call. See [lifecycle](#lifecycle) for details.
 
-### 内置状态
+#### Built-in State
 
-有些状态是由画面配置方法自动设置的：
+Some states will be set automatically by the configured method of the scene.
 
-| 状态           | 描述             | 由哪个方法设置 |
-| -------------- | ---------------- | -------------- |
-| show_time      | 开始显示的时间戳 | show           |
-| close_time     | 结束显示的时间戳 | show           |
-| duration       | 持续时间         | duration       |
-| keys           | 被按下的按键     | close_on       |
-| responses_time | 按下按键的时间戳 | close_on       |
+| State         | Description                           | Which method |
+| ------------- | ------------------------------------- | ------------ |
+| show_time     | timestamp of the start of the display | show         |
+| close_time    | timestamp of the end of the display   | show         |
+| duration      | duration                              | duration     |
+| keys          | pressed keys                          | close_on     |
+| response_time | timestamp of key press                | close_on     |
 
-## 处理交互
+### Handle Interaction
 
-画面使用发布/订阅模式（Pub/Sub Pattern）处理交互事件，我们可以通过添加事件监听器来处理不同的交互事件。
+In most cases, using `close_on` method to configure the keys to close the scene is enough.
+However, if we want to do other things when the keys are pressed,
+we can use the `on` method to add custom functions for different keys.
+These functions are named event listeners, ref [wiki](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern):
 
 ```python
 
-# add listener for keys, listener will be executed when corresponding key is pressed
+# add listener for keys, listener will be executed when the corresponding key is pressed
 ctx.Scene().on(
     space=lambda e: print(f"space key was pressed, this event is: {e}"),
     mouse_left=lambda e: print(f"left mouse button was pressed, this event is: {e}"),
 )
 ```
 
-需要注意的是，一种事件只能有一个监听器。
+Note that one key with one listener, the last listener will cover the previous listeners:
 
 ```python
 # only the last listener will be emitted when multiple listeners are added for the same key
@@ -159,30 +198,52 @@ ctx.Scene().on(
 ).on(
     space=lambda e: print("this listener will be executed")
 )
+
+# when `f` is pressed, the scene won't be closed
+ctx.Scene().close_on("f", "j").on(
+    f=lambda e: print("this listener will cover `close_on` listener")
+)
 ```
 
-## 数据收集
+Every listener function should accept an event object as parameter `e`,
+which includes the scene that emits the event and the pressed keys
 
-psychopy 推荐的实验数据收集方式是使用 `ExperimentHandler`，本库对其进行了简单封装。
-现在我们可以使用 `ctx.addLine` 进行数据收集，并通过 `ctx.expHandler` 访问 `ExperimentHandler` 对象。
+```python
+ctx.Scene().on(
+    space=lambda e: print(f"this scene is: {e.target}; pressed keys are: {e.keys}")
+)
+```
+
+#### Keys
+
+- keyboard: same as the return value of `keyboard.getKeys()`
+- mouse: `mouse_left`、`mouse_right`、`mouse_middle`
+
+### Data Collection
+
+PsychoPy's recommended way of collecting experimental data is to use `ExperimentHandler`.
+Now we can use `ctx.addLine` for data collection,
+and access the `ExperimentHandler` object via `ctx.expHandler`.
 
 ```python
 # it will call `ctx.expHandler.addData` and `ctx.expHandler.nextEntry` automatically
 ctx.addLine(correct=..., rt=...)
 ```
 
-正如 [状态管理](#状态管理) 部分所说，交互数据是由 `close_on` 自动收集的。
-如果我们使用了 `close_on` 方法，可以在 `show` 方法执行后访问这些状态。
+As stated in the [State Management](#state-management) section,
+some interaction data are automatically collected by `close_on`.
+If we use the `close_on` method, we can access these states after the `show` method is executed:
 
 ```python
 scene = ctx.Scene().close_on("f", "j")
 scene.show()
 
 keys = scene.get("keys") # KeyPress or str
-responses_time = scene.get("responses_time") # float
+response_time = scene.get("response_time") # float
 ```
 
-当然，我们也可以像 [处理交互](#处理交互) 部分那样，手动添加监听器。
+Of course, we can also add listeners manually
+as in the [Handle Interaction](#handle-interaction) section:
 
 ```python
 scene = ctx.Scene().on(space=lambda e: scene.set(rt=core.getTime() - scene.get("show_time")))
@@ -191,54 +252,42 @@ scene.show()
 rt = scene.get("rt") # float
 ```
 
-## 生命周期
+### Lifecycle
 
-使用 `show` 方法将画面绘制到屏幕上时，需要经过一系列初始化步骤：
-重置并初始化状态、清理事件缓冲、绘制刺激、记录开始显示时间等。
-在这个过程中，同时会执行生命周期钩子，让我们在画面渲染的特定阶段进行一些自定义的操作。
+There are a series of steps involved
+in drawing a picture to the screen using the `show` method:
+Resetting and initializing the state, clearing the event buffer,
+drawing the stimulus, recording the start of the display time, and so on,
+this entire process is named the lifecycle of the scene.
+During this process, lifecycle hooks are executed at the same time,
+allowing us to perform some custom actions at specific stages of the screen showing process.
 
-如果我们想在首次绘制前更改刺激参数，可以使用 `hook` 装饰器在 `setup` 阶段添加生命周期钩子：
+| Stage | Execution Timing  | Common Usage                 |
+| ----- | ----------------- | ---------------------------- |
+| setup | before first draw | set stimulus parameters      |
+| drawn | after first draw  | execute time-consuming tasks |
+| frame | every frame       | update stimulus parameters   |
 
-```python
-from psychopy.visual import TextStim
-
-stim = TextStim(win, text="")
-
-@(ctx.Scene().hook('setup'))
-def scene():
-    # change stimulus parameters here
-    stim.color = "red"
-
-scene.show()
-```
-
-### 生命周期阶段：
-
-| 阶段  | 执行时机   | 通常用法     |
-| ----- | ---------- | ------------ |
-| setup | 首次绘制前 | 设置刺激参数 |
-| drawn | 首次绘制后 | 执行耗时任务 |
-| frame | 逐帧       | 更新刺激参数 |
-
-### 渲染时机
-
-`show` 方法逻辑图示：
+Illustration of the lifecycle:
 
 ```mermaid
 graph TD
-初始化 --> setup --> 首次绘制 --> drawn --> c{是否显示}
-c -->|否| 关闭
-c -->|是| frame --> 再次绘制 --> 监听交互事件 --> c
+Initialize --> setup-stage --> First-draw --> drawn-stage --> c{should it show ?}
+c -->|no| Close
+c -->|yes| frame-stage --> Redraw --> Listen-interaction --> c
 ```
 
-## 最佳实践
+## Best Practices
 
-### 上下文和任务分离
+### Separation of context and task
 
-建议以函数形式编写任务，并将实验上下文作为第一参数传入，其余参数作为任务的特有参数，并返回实验数据。
+It is recommended to write the task as a function,
+pass the experimental context as the first parameter,
+the task-specific parameters as the rest of the parameters,
+and return the experimental data.
 
 ```python
-from exp import Context
+from psychopy_scene import Context
 
 def task(ctx: Context, duration: float):
     from psychopy.visual import TextStim
@@ -249,19 +298,21 @@ def task(ctx: Context, duration: float):
     return ctx.expHandler.getAllEntries()
 ```
 
-### 只关注特定于任务的逻辑
+### Focus only on task-related logic
 
-任务函数不应包含任何与任务本身无关的逻辑，例如：
+Task functions should not contain any logic that is not related to the task itself, for example:
 
-- 指导语和结束语
-- block 数量
-- 数据处理、分析、结果展示
+- Introductory and closing statements
+- Number of blocks
+- Data processing, analysis, presentation of results
 
-一个好的任务函数应该只呈现一个 block，除非 block 间存在数据依赖。
-对于需要呈现多个 block 的实验，考虑以下示例。
+If there are no data dependencies between blocks,
+it is recommended to write the task function as a single block.
+For experiments that require the presentation of multiple blocks,
+consider the following example.
 
 ```python
-from exp import Context
+from psychopy_scene import Context
 from psychopy.visual import Window
 
 def task(ctx: Context):
@@ -272,16 +323,18 @@ def task(ctx: Context):
     scene.show()
     return ctx.expHandler.getAllEntries()
 
-ctx = Context(Window())
+win = Window()
 data = []
 for block_index in range(10):
+    ctx = Context(win)
+    ctx.expHandler.extraInfo['block_index'] = block_index
     block_data = task(ctx)
     data.extends(block_data)
 ```
 
-### trial 迭代器和任务分离
+### Separate of TrialHandler and task
 
-得益于 psychopy 对 trial 的封装，我们可以很方便地控制下一个 trial。
+Thanks to PsychoPy's encapsulation, we can easily control the next trial.
 
 ```python
 from psychopy.data import TrialHandler
@@ -291,12 +344,13 @@ for trial in handler:
     trial # except: 'A" or 'B' or 'C'
 ```
 
-为了 trial 迭代器和任务函数的分离，本库提供了 `ctx.handler` 属性，
-它可以用来控制下一个 trial，并将 trial 相关的数据收集到 `ctx.expHandler` 中。
-我们只需要在创建上下文时设置 `handler` 参数即可。
+For the separation of the trial iterator from the task function,
+the library provides the `ctx.handler` property.
+It can be used to control the next trial and collect trial-related data into `ctx.expHandler`.
+All we need to do is set the `handler` parameter when creating the context.
 
 ```python
-from exp import Context
+from psychopy_scene import Context
 from psychopy.visual import Window
 from psychopy.data import TrialHandler
 
@@ -318,11 +372,14 @@ ctx = Context(
 data = task(ctx)
 ```
 
-但是，当我们打算使用 `StairHandler` 并访问 `ctx.handler.addResponse` 时，
-pylance 类型检查器会报错，即使 `ctx.handler` 是 `StairHandler` 对象。
-这是因为 `ctx.handler` 的类型并没有 `addResponse` 方法，
-为了解决这个问题，我们可以使用 `ctx.responseHandler` 替代 `ctx.handler`。
+However, when we intend to use `StairHandler` and access `ctx.handler.addResponse`,
+the Pylance type checker will report an error,
+even though `ctx.handler` is a `StairHandler` object.
+This is because `ctx.handler` does not have an `addResponse` method of type `ctx.handler`.
+To work around this, we can use `ctx.responseHandler` instead of `ctx.handler`.
 
-需要注意的是，如果在运行时 `ctx.handler` 没有 `addResponse` 方法，
-访问 `ctx.responseHandler` 将会抛出异常。
-所以在使用 `ctx.responseHandler` 时，请确保传入的 `handler` 参数有 `addResponse` 方法。
+> [!WARNING]
+> If the `ctx.handler` does not have an `addResponse` method at runtime,
+> accessing `ctx.responseHandler` will throw an exception.
+> So make sure the `handler` parameter passed in
+> has an `addResponse` method when using `ctx.responseHandler`.

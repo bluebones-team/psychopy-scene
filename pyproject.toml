@@ -4,7 +4,7 @@ version = "0.1.0rc1"
 authors = [
   { name = "cubx", email = "shawn6304@qq.com" }
 ]
-description = "Lightweight drawing framework for PsychoPy"
+description = "Lightweight experiment framework for PsychoPy"
 readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
