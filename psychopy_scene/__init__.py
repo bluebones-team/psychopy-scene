@@ -14,8 +14,9 @@ LIFECYCLE_STAGE = Literal["setup", "drawn", "frame"]
 @dataclass
 class Event(Generic[T]):
     target: T
+    """who emitted this event"""
     keys: list[str | KeyPress]
-    """captured keys or mouse buttons"""
+    """captured keys"""
 
 
 class Listener(Protocol, Generic[T]):
@@ -29,7 +30,13 @@ class EventEmitter:
         self.listeners: dict[str, Listener[Self]] = {}
 
     def on(self, **kfs: Listener[Self]):
-        """add listeners for keys"""
+        """
+        add listeners for keys, includes keyboard keys and mouse buttons.
+
+        keyborad keys: the return value of `keyboard.getKeys()`
+
+        mouse buttons: `mouse_left`, `mouse_middle`, `mouse_right`
+        """
         self.listeners.update(kfs)
         return self
 
@@ -68,7 +75,7 @@ class StateManager:
         self.state: dict[str, Any] = {}
 
     def get(self, key: str):
-        """get state"""
+        """get state, raise `KeyError` if value is None"""
         value = self.state.get(key)
         if value is None:
             raise KeyError(f"{key} is not in self.data")
