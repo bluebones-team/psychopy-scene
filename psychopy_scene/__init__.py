@@ -1,4 +1,4 @@
-from typing import Any, Callable, Generic, Literal, Protocol, TypeVar
+from typing import Any, Callable, Generic, Iterable, Literal, Protocol, TypeVar
 from typing_extensions import Self
 from dataclasses import dataclass
 from psychopy import core, logging
@@ -122,11 +122,7 @@ class Drawable(Protocol):
     def draw(self): ...
 class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
     def __init__(
-        self,
-        win: Window,
-        kbd: Keyboard,
-        mouse: Mouse,
-        *drawables: Drawable,
+        self, win: Window, kbd: Keyboard, mouse: Mouse, drawables: list[Drawable]
     ):
         """
         draw stimuli and handle keyboard and mouse interaction
@@ -151,9 +147,11 @@ class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
         if self.__has_showed:
             raise Exception(f"{self.__class__.__name__} is showing")
         self.__has_showed = True
+        logging.debug("initialization")
         self.reset().set(**inital_state)
         self.clearEvents()
         self.run_hooks("setup")
+        logging.debug("first draw")
         self.draw().win.flip()  # first draw
         self.set(show_time=core.getTime())
         self.run_hooks("drawn")
@@ -161,25 +159,19 @@ class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
             self.run_hooks("frame")
             self.draw().win.flip()  # redraw
             self.listen()
-        self.set(close_time=core.getTime())
         return self
 
     def close(self):
         if not self.__has_showed:
             raise Exception(f"{self.__class__.__name__} is closed")
         self.__has_showed = False
+        self.set(close_time=core.getTime())
         return self
 
 
-class Env(Protocol):
-    win: Window
-    kbd: Keyboard
-    mouse: Mouse
-
-
 class Scene(Showable):
-    def __init__(self, env: Env, *drawables: Drawable):
-        super().__init__(env.win, env.kbd, env.mouse, *drawables)
+    def __init__(self, env: "SceneTool", drawables: list[Drawable]):
+        super().__init__(env.win, env.kbd, env.mouse, drawables)
 
     def duration(self, duration: float | None = None):
         """
@@ -209,22 +201,36 @@ class Scene(Showable):
         return self
 
 
-@dataclass
-class SceneTool(Env):
-    win: Window
-    kbd: Keyboard
-    mouse: Mouse
+class SceneTool:
+    def __init__(self, win: Window, kbd: Keyboard, mouse: Mouse):
+        self.win = win
+        self.kbd = kbd
+        self.mouse = mouse
+        self.__listeners: dict[str, Listener[Scene]] = {}
 
-    def Scene(self, *drawables: Drawable):
+    def Scene(
+        self,
+        drawables: Drawable | list[Drawable] | None = None,
+        *deprecated_args: Drawable,
+    ):
         """create a scene"""
-        return Scene(self, *drawables)
+        drawables = (
+            drawables
+            if isinstance(drawables, list)
+            else [drawables] if drawables is not None else []
+        )
+        if deprecated_args:
+            drawables.extend(deprecated_args)
+            logging.warning(
+                "ctx.Scene(stim1, stim2, ...) will be deprecated in >=0.1.0rc2 version. Please pass multiple stimuli through a Iterable object: ctx.Scene([stim1, stim2, ...])"
+            )
+        return Scene(self, drawables).on(**self.__listeners)
 
     def text(self, *args, **kwargs):
         """create a text scene quickly"""
         from psychopy.visual import TextStim
 
-        stim = TextStim(self.win, *args, **kwargs)
-        return self.Scene(stim)
+        return self.Scene(TextStim(self.win, *args, **kwargs))
 
     def fixation(self, duration: float):
         """create a fixation cross"""
@@ -233,6 +239,11 @@ class SceneTool(Env):
     def blank(self, duration: float):
         """create a blank screen"""
         return self.text("").duration(duration)
+
+    def on(self, **kwargs: Listener):
+        """add listeners for all scenes"""
+        self.__listeners = {**self.__listeners, **kwargs}
+        return self
 
 
 class IterableHandler(Protocol):
@@ -267,6 +278,11 @@ class DataHandler:
             raise Exception("handler should has addResponse method")
         return handler  # type: ignore
 
+    def addLine(self, **kwargs: float | str):
+        for k, v in kwargs.items():
+            self.expHandler.addData(k, v)
+        self.expHandler.nextEntry()
+
 
 class Context(SceneTool, DataHandler):
     def __init__(
@@ -277,19 +293,6 @@ class Context(SceneTool, DataHandler):
         handler: IterableHandler | None = None,
         expHandler: ExperimentHandler | None = None,
     ):
-        """
-        shared parameters for each task
-
-        :params win:
-        :params kbd:
-        :params mouse:
-        :param handler: generate stimuli for each trial
-        :param expHandler:
-        """
+        """shared parameters for each task"""
         SceneTool.__init__(self, win, kbd or Keyboard(), mouse or Mouse(win))
         DataHandler.__init__(self, handler, expHandler)
-
-    def addLine(self, **kwargs: float | str):
-        for k, v in kwargs.items():
-            self.expHandler.addData(k, v)
-        self.expHandler.nextEntry()

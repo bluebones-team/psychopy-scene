@@ -70,7 +70,7 @@ from psychopy.visual import TextStim
 stim_1 = TextStim(win, text="Hello")
 stim_2 = TextStim(win, text="World")
 # create scene
-scene = ctx.Scene(stim_1, stim_2)
+scene = ctx.Scene([stim_1, stim_2])
 # show scene
 scene.show()
 ```

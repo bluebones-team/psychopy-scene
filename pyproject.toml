@@ -1,6 +1,6 @@
 [project]
 name = "psychopy-scene"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 authors = [
   { name = "cubx", email = "shawn6304@qq.com" }
 ]
