@@ -7,6 +7,9 @@
 
 本项目是基于 [PsychoPy](https://github.com/psychopy/psychopy) 的轻量级实验框架，源码 **<300 行**。
 
+> [!NOTE]
+> 本项目旨于提供构建 PsychoPy 实验的新方式，仅提供最基础的 API，并鼓励开发者对本项目进行二次开发。
+
 ## 特性
 
 - 轻量级：只有一个文件，无额外依赖项
@@ -18,6 +21,8 @@
 ```bash
 pip install psychopy-scene
 ```
+
+或直接复制 `psychopy_scene` 文件夹到项目根目录。
 
 ## 使用
 
@@ -67,7 +72,8 @@ from psychopy.visual import TextStim
 stim_1 = TextStim(win, text="Hello")
 stim_2 = TextStim(win, text="World")
 # create scene
-scene = ctx.Scene(stim_1, stim_2)
+scene = ctx.Scene(stim_1) # draw stim_1
+scene = ctx.Scene([stim_1, stim_2]) # draw stim_1 and stim_2
 # show scene
 scene.show()
 ```
@@ -79,24 +85,12 @@ scene.show()
 scene = ctx.Scene(stim).duration(1).close_on("f", 'j')
 ```
 
-有些画面的呈现时间不是固定的，这时我们可以通过[状态管理](#状态管理)动态设置呈现时间：
+有些画面的呈现时间是不固定的，这时我们可以通过[状态管理](#状态管理)动态设置呈现时间：
 
 ```python
 scene = ctx.Scene(stim).duration()
 scene.show(duration=1)
 ```
-
-> [!CAUTION]
-> 画面配置的错误写法：
->
-> ```python
-> scene = ctx.Scene(stim).duration(1).duration(2)
-> ```
->
-> ```python
-> scene_1 = ctx.Scene(stim).duration(1)
-> scene_2 = scene_1.close_on("f", 'j')
-> ```
 
 不同的画面可能需要绘制同一类刺激，比如指导语和结束语这 2 个画面都需要呈现文本。
 这时我们只需要创建 1 个文本刺激，再使用 `hook` 方法向画面的特定阶段添加自定义函数，

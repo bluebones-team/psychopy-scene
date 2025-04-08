@@ -8,7 +8,6 @@ from psychopy.event import Mouse
 from psychopy.data import ExperimentHandler
 
 T = TypeVar("T", bound="EventEmitter")
-LIFECYCLE_STAGE = Literal["setup", "drawn", "frame"]
 
 
 @dataclass
@@ -33,9 +32,14 @@ class EventEmitter:
         """
         add listeners for keys, includes keyboard keys and mouse buttons.
 
-        keyborad keys: the return value of `keyboard.getKeys()`
-
+        keyborad keys: the return value of `keyboard.getKeys()`,
         mouse buttons: `mouse_left`, `mouse_middle`, `mouse_right`
+
+        Example:
+        >>> self.on(
+        ...     space=lambda e: print(f"space key is pressed, keys: {e.keys}"),
+        ...     mouse_left=lambda e: print(f"mouse left button is pressed, keys: {e.keys}"),
+        ... )
         """
         self.listeners.update(kfs)
         return self
@@ -75,14 +79,19 @@ class StateManager:
         self.state: dict[str, Any] = {}
 
     def get(self, key: str):
-        """get state, raise `KeyError` if value is None"""
+        """get state. if value is `None`, raise `KeyError`.
+
+        if you want to process `None` manually, use `self.state.get()` instead."""
         value = self.state.get(key)
         if value is None:
-            raise KeyError(f"{key} is not in self.data")
+            raise KeyError(f"{key} is not in self.state")
         return value
 
     def set(self, **kwargs):
-        """set state"""
+        """set state
+
+        Example:
+        >>> self.set(rt=1.1, correct=True, stim="A")"""
         self.state.update(kwargs)
         return self
 
@@ -92,25 +101,30 @@ class StateManager:
         return self
 
 
-class Task(Protocol):
-    def __call__(self) -> Any: ...
 class Lifecycle:
+    Stage = Literal["setup", "drawn", "frame"]
+
     def __init__(self):
-        self.lifecycles: dict[LIFECYCLE_STAGE, list[Task]] = {
+        self.lifecycles: dict[Lifecycle.Stage, list[Callable[[], Any]]] = {
             "setup": [],
             "drawn": [],
             "frame": [],
         }
 
-    def hook(self, stage: LIFECYCLE_STAGE) -> Callable[[Task], Self]:
-        """add lifecycle hook"""
+    def hook(self, stage: "Lifecycle.Stage") -> Callable[[Callable[[], Any]], Self]:
+        """add lifecycle hook
+
+        Example:
+        >>> self.hook("setup")(lambda: print("setup stage is called"))
+        >>> @(self.hook("setup"))
+        ... def _():
+        ...     print("setup stage is called")
+        """
         if stage not in self.lifecycles:
-            raise KeyError(
-                f"{stage} is not in lifecycles, should be one of {self.lifecycles.keys()}"
-            )
+            raise KeyError(f"expected one of {self.lifecycles.keys()}, but got {stage}")
         return lambda task: self.lifecycles[stage].append(task) or self
 
-    def run_hooks(self, stage: LIFECYCLE_STAGE):
+    def run_hooks(self, stage: "Lifecycle.Stage"):
         """execute lifecycle hooks"""
         logging.debug(f"emit {stage} hook")
         for task in self.lifecycles[stage]:
@@ -118,25 +132,21 @@ class Lifecycle:
         return self
 
 
-class Drawable(Protocol):
-    def draw(self): ...
-class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
-    def __init__(
-        self,
-        win: Window,
-        kbd: Keyboard,
-        mouse: Mouse,
-        *drawables: Drawable,
-    ):
-        """
-        draw stimuli and handle keyboard and mouse interaction
+class Env(Protocol):
+    win: Window
+    kbd: Keyboard
+    mouse: Mouse
 
-        :params drawables: will be drawn after setup stage
-        """
-        EventEmitter.__init__(self, kbd, mouse)
+
+class Drawable(Protocol):
+    def draw(self) -> Any: ...
+class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
+    def __init__(self, env: Env, drawables: list[Drawable]):
+        """draw stimulus and handle keyboard and mouse interaction"""
+        EventEmitter.__init__(self, env.kbd, env.mouse)
         StateManager.__init__(self)
         Lifecycle.__init__(self)
-        self.win = win
+        self.win = env.win
         self.drawables = drawables
         self.__has_showed = False
 
@@ -151,9 +161,11 @@ class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
         if self.__has_showed:
             raise Exception(f"{self.__class__.__name__} is showing")
         self.__has_showed = True
+        logging.debug("initialization")
         self.reset().set(**inital_state)
         self.clearEvents()
         self.run_hooks("setup")
+        logging.debug("first draw")
         self.draw().win.flip()  # first draw
         self.set(show_time=core.getTime())
         self.run_hooks("drawn")
@@ -161,46 +173,41 @@ class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
             self.run_hooks("frame")
             self.draw().win.flip()  # redraw
             self.listen()
-        self.set(close_time=core.getTime())
         return self
 
     def close(self):
         if not self.__has_showed:
             raise Exception(f"{self.__class__.__name__} is closed")
         self.__has_showed = False
+        self.set(close_time=core.getTime())
         return self
 
 
-class Env(Protocol):
-    win: Window
-    kbd: Keyboard
-    mouse: Mouse
-
-
 class Scene(Showable):
-    def __init__(self, env: Env, *drawables: Drawable):
-        super().__init__(env.win, env.kbd, env.mouse, *drawables)
+    def __time_checker(self):
+        if core.getTime() - self.get("show_time") >= self.get("duration"):
+            self.close()
 
     def duration(self, duration: float | None = None):
         """
         close the scene when the duration is over, shouldn't be called twice
 
-        Example
-        >>> scene.duration(3)  # close the scene after 3 seconds
-        >>> scene.duration()  # should set duration state when called show method
-        ... scene.show(duration=3)
-
-        """
+        Example:
+        >>> self.duration(3)  # close the scene after 3 seconds
+        >>> self.duration()  # should set duration state when called show method
+        ... self.show(duration=3)"""
+        if self.__time_checker in self.lifecycles["frame"]:
+            raise Exception("duration shouldn't be multiple called")
         if duration is not None:
             self.hook("setup")(lambda: self.set(duration=duration))
-        self.hook("frame")(
-            lambda: core.getTime() - self.get("show_time") >= self.get("duration")
-            and self.close()
-        )
+        self.hook("frame")(self.__time_checker)
         return self
 
     def close_on(self, *keys: str):
-        """close when keys are pressed, log pressed keys and response time"""
+        """close when keys are pressed, log pressed keys and response time
+
+        Example:
+        >>> self.close_on("space", "escape")"""
         cbs: dict[str, Listener[Self]] = {
             key: lambda e: self.set(keys=e.keys, response_time=core.getTime()).close()
             for key in keys
@@ -209,28 +216,45 @@ class Scene(Showable):
         return self
 
 
-@dataclass
 class SceneTool(Env):
-    win: Window
-    kbd: Keyboard
-    mouse: Mouse
+    def __init__(self, win: Window, kbd: Keyboard, mouse: Mouse):
+        self.win = win
+        self.kbd = kbd
+        self.mouse = mouse
 
-    def Scene(self, *drawables: Drawable):
-        """create a scene"""
-        return Scene(self, *drawables)
+    def Scene(
+        self,
+        drawables: Drawable | list[Drawable] | None = None,
+        *deprecated_args: Drawable,
+    ):
+        """create a scene
+
+        Example:
+        >>> self.Scene(stim)
+        >>> self.Scene([stim1, stim2])"""
+        drawables = (
+            drawables
+            if isinstance(drawables, list)
+            else [drawables] if drawables is not None else []
+        )
+        if deprecated_args:
+            drawables.extend(deprecated_args)
+            logging.warning(
+                "ctx.Scene(stim1, stim2, ...) will be deprecated in psychopy_scene>=0.1.0rc2 version. Please pass multiple stimuli through a Iterable object: ctx.Scene([stim1, stim2, ...])"
+            )
+        return Scene(self, drawables)
 
     def text(self, *args, **kwargs):
         """create a text scene quickly"""
         from psychopy.visual import TextStim
 
-        stim = TextStim(self.win, *args, **kwargs)
-        return self.Scene(stim)
+        return self.Scene(TextStim(self.win, *args, **kwargs))
 
-    def fixation(self, duration: float):
+    def fixation(self, duration: float | None = None):
         """create a fixation cross"""
         return self.text("+").duration(duration)
 
-    def blank(self, duration: float):
+    def blank(self, duration: float | None = None):
         """create a blank screen"""
         return self.text("").duration(duration)
 
@@ -267,6 +291,12 @@ class DataHandler:
             raise Exception("handler should has addResponse method")
         return handler  # type: ignore
 
+    def addLine(self, **kwargs: float | str):
+        """add a row to the data"""
+        for k, v in kwargs.items():
+            self.expHandler.addData(k, v)
+        self.expHandler.nextEntry()
+
 
 class Context(SceneTool, DataHandler):
     def __init__(
@@ -277,19 +307,6 @@ class Context(SceneTool, DataHandler):
         handler: IterableHandler | None = None,
         expHandler: ExperimentHandler | None = None,
     ):
-        """
-        shared parameters for each task
-
-        :params win:
-        :params kbd:
-        :params mouse:
-        :param handler: generate stimuli for each trial
-        :param expHandler:
-        """
+        """shared parameters for each task"""
         SceneTool.__init__(self, win, kbd or Keyboard(), mouse or Mouse(win))
         DataHandler.__init__(self, handler, expHandler)
-
-    def addLine(self, **kwargs: float | str):
-        for k, v in kwargs.items():
-            self.expHandler.addData(k, v)
-        self.expHandler.nextEntry()

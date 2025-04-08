@@ -5,7 +5,10 @@
 
 English | [简体中文](README-zh.md)
 
-This repo is a lightweight experiment framework for [PsychoPy](https://github.com/psychopy/psychopy), source code **<300 lines**.
+This project is a lightweight experiment framework for [PsychoPy](https://github.com/psychopy/psychopy), source code **<300 lines**.
+
+> [!NOTE]
+> this project aim to provide a new way to build PsychoPy experiments, only provide the basic API and encourage developers to develop on top of this project.
 
 ## Features
 
@@ -18,6 +21,8 @@ This repo is a lightweight experiment framework for [PsychoPy](https://github.co
 ```bash
 pip install psychopy-scene
 ```
+
+or copy the `psychopy_scene` folder directly to the root directory of your project.
 
 ## Usage
 
@@ -70,7 +75,8 @@ from psychopy.visual import TextStim
 stim_1 = TextStim(win, text="Hello")
 stim_2 = TextStim(win, text="World")
 # create scene
-scene = ctx.Scene(stim_1, stim_2)
+scene = ctx.Scene(stim_1) # draw stim_1
+scene = ctx.Scene([stim_1, stim_2]) # draw stim_1 and stim_2
 # show scene
 scene.show()
 ```
