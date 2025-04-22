@@ -1,103 +1,116 @@
-from psychopy.visual import Window, TextStim
-from psychopy_scene import Context, Drawable
+from psychopy.visual import TextStim
+from psychopy import core
+from psychopy_scene import Drawable
 from . import util
 
 
 def test_duration():
-    ctx = Context(Window())
+    ctx = util.get_ctx()
+    stim = TextStim(ctx.win)
+    scene = ctx.scene(duration=0.1)(lambda: stim)
+    assert scene.duration == 0.1
+    scene.config(duration=0.2)
+    assert scene.duration == 0.2
+    scene.config(duration=None)
+    assert scene.duration == 0.2
+    scene.show()
+    duration = core.getTime() - scene.get("show_time")
+    diff = duration - scene.duration
+    print(f"duration diff: {diff}")
+    assert abs(diff) < 0.05
+
+
+def test_close_on():
+    ctx = util.get_ctx()
     stim = TextStim(ctx.win)
 
-    # test fixed duration
-    @(ctx.Scene(stim).duration(0.01).hook("setup"))
-    def scene_1():
-        assert scene_1.get("duration") == 0.01
+    _ = ctx.scene(close_on="key_space")(lambda: stim)
+    assert _.callbacks["key_space"] == _.close
 
-    scene_1.show()
+    nums = [1, 2, 3]
+    _ = ctx.scene(close_on=(f"key_{k}" for k in nums))(lambda: stim)
+    for k in nums:
+        assert _.callbacks[f"key_{k}"] == _.close
 
-    # test fixed duration won't override dynamic duration
-    @(ctx.Scene(stim).duration(0.01).hook("setup"))
-    def scene_2():
-        assert scene_2.get("duration") == 0.01
+    _ = ctx.scene(close_on=("key_q", "mouse_middle"))(lambda: stim)
+    _.config(close_on=["scene_drawn"])
+    assert _.callbacks["key_q"] == _.close
+    assert _.callbacks["mouse_middle"] == _.close
+    assert _.callbacks["scene_drawn"] == _.close
 
-    scene_2.show(duration=0.02)
+    util.except_error(lambda: ctx.scene(close_on="key_e_"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="ke_space"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="mOuse_middle"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="mouse_any"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="scene_setu"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="scene_draw"), ValueError)
+    util.except_error(lambda: ctx.scene(close_on="scene_framee"), ValueError)
 
-    # test dynamic duration
-    @(ctx.Scene(stim).duration().hook("setup"))
-    def scene_3():
-        assert scene_3.get("duration") == 0.01
+    stim.text = "should close on: key_q"
+    ctx.scene(close_on=["key_escape", "key_q"])(lambda: stim).show()
 
-    scene_3.show(duration=0.01)
+    stim.text = "should close on: mouse_middle"
+    ctx.scene(close_on=["key_escape", "mouse_middle"])(lambda: stim).show()
 
-    # test dynamic duration won't override fixed duration
-    try:
-        ctx.Scene(stim).duration().show()
-    except KeyError:
-        assert True
-    else:
-        assert False
-
-    # test multiple calls to duration
-    try:
-        ctx.Scene(stim).duration(0.01).duration(0.02)
-    except Exception:
-        assert True
-    else:
-        assert False
+    stim.text = "shouldn't show on screen"
+    ctx.scene(close_on=["key_escape", "scene_drawn"])(lambda: stim).show()
 
 
 def test_on():
-    ctx = Context(Window())
+    ctx = util.get_ctx()
     stim = TextStim(ctx.win)
-    listener_1 = lambda e: e
-    listener_2 = lambda e: e
+    cb_1 = lambda: None
+    cb_2 = lambda: None
 
-    # test multiple keys
-    @(ctx.Scene(stim).close_on("q", "escape").hook("setup"))
-    def scene_1():
-        assert scene_1.listeners.keys() == {"q", "escape"}
-        scene_1.close()
+    # invalid event name
+    util.except_error(lambda: ctx.scene().on("key_Q", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("keY_space", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("on_mouse_middle", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("_mouse_right", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("scene_sEtup", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("onscene_drawn", cb_1), ValueError)
+    util.except_error(lambda: ctx.scene().on("Scene_frame", cb_1), ValueError)
 
-    scene_1.show()
+    # overlap event name
+    util.except_error(lambda: ctx.scene(close_on=["key_a"], on_key_a=cb_1), Exception)
+    util.except_error(
+        lambda: ctx.scene(on_mouse_right=cb_1).on("mouse_right", cb_2), Exception
+    )
+    util.except_error(
+        lambda: ctx.scene(close_on=["scene_frame"]).on("scene_frame", cb_2), Exception
+    )
+    util.except_error(
+        lambda: ctx.scene().on("key_c", cb_2).config(close_on=["key_c"]), Exception
+    )
+    util.except_error(
+        lambda: ctx.scene(close_on=["scene_setup"])(lambda: stim), Exception
+    )
+    util.except_error(lambda: ctx.scene(on_scene_setup=cb_1)(lambda: stim), Exception)
+    util.except_error(
+        lambda: ctx.scene()(lambda: stim).on("scene_setup", cb_2), Exception
+    )
 
-    # test multiple calls
-    @(ctx.Scene(stim).close_on("a", "b").close_on("c", "d").hook("setup"))
-    def scene_2():
-        assert scene_2.listeners.keys() == {"a", "b", "c", "d"}
-        scene_2.close()
+    stim.text = "text should follow mouse"
+    ctx.scene(
+        close_on="key_escape", on_scene_frame=lambda: stim.setPos(ctx.mouse.getPos())
+    )(lambda: stim).show()
 
-    scene_2.show()
+    stim.text = "text should be colored on: key_space, mouse_right"
+    ctx.scene(
+        close_on="key_escape",
+        on_key_space=lambda: stim.setColor("red"),
+        on_mouse_right=lambda: stim.setColor("green"),
+    )(lambda: stim).show()
 
-    # test keys override previous keys
-    @(ctx.Scene(stim).close_on("e", "f").on(f=listener_1, g=listener_2).hook("setup"))
-    def scene_3():
-        assert scene_3.listeners.keys() == {"e", "f", "g"}
-        assert scene_3.listeners["f"] is listener_1
-        scene_3.close()
-
-    scene_3.show()
-
-    # test keys override previous keys
-    @(ctx.Scene(stim).on(f=listener_1, g=listener_2).close_on("e", "f").hook("setup"))
-    def scene_4():
-        assert scene_4.listeners.keys() == {"e", "f", "g"}
-        assert scene_4.listeners["f"] is not listener_1
-        scene_4.close()
-
-    scene_4.show()
-
-    # test keys override previous keys
-    @(ctx.Scene(stim).on(f=listener_1).close_on("f").on(f=listener_2).hook("setup"))
-    def scene_5():
-        assert scene_5.listeners.keys() == {"f"}
-        assert scene_5.listeners["f"] is listener_2
-        scene_5.close()
-
-    scene_5.show()
+    stim.text = "should show any key you press"
+    _ = ctx.scene(
+        close_on="key_escape",
+        on_key_any=lambda: stim.setText(f"key: {_.get('events')[-1].key}"),
+    )(lambda: stim)
+    _.show()
 
 
 def test_draw():
-    ctx = Context(Window())
-
     class TestDrawable(Drawable):
         results = []
 
@@ -108,42 +121,35 @@ def test_draw():
             TestDrawable.results.append(self.value)
 
     results = util.generate_random_list()
-    scene = ctx.Scene([TestDrawable(r) for r in results])
-    scene.draw()
+    ctx = util.get_ctx()
+    ctx.scene(duration=0)(lambda: (TestDrawable(r) for r in results)).show()
     assert TestDrawable.results == results
 
 
 def test_show():
-    ctx = Context(Window())
-    scene = ctx.Scene().duration(0)
+    ctx = util.get_ctx()
     results = []
 
-    @scene.hook("setup")
-    def _():
+    def on_setup():
         results.append(1)
-        assert scene.get("duration") == 0
-        try:
-            scene.get("show_time")
-        except KeyError:
-            assert True
-        else:
-            assert False
+        assert scene.duration == 0
+        util.except_error(lambda: scene.get("show_time"), KeyError)
+        return []
 
-    @scene.hook("drawn")
-    def _():
+    def on_drawn():
         results.append(2)
         assert scene.get("show_time") is not None
-        try:
-            scene.get("close_time")
-        except KeyError:
-            assert True
-        else:
-            assert False
+        util.except_error(lambda: scene.get("events"), KeyError)
 
-    @scene.hook("frame")
-    def _():
+    def on_frame():
         results.append(3)
-        assert scene.get("close_time") is not None
+        assert scene.get("events") is not None
 
-    scene.show()
+    scene = ctx.scene(
+        duration=1,
+        on_scene_setup=on_setup,
+        on_scene_drawn=on_drawn,
+        on_scene_frame=on_frame,
+    )
+    scene.config(duration=0).show()
     assert results == [1, 2, 3]

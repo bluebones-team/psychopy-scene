@@ -1,4 +1,10 @@
-from psychopy_scene import Context
+from psychopy_scene import Context, Event
+from psychopy import data
+import random
+
+handler = data.TrialHandler(
+    trialList=random.sample(range(100), 10), nReps=1, method="sequential"
+)
 
 
 def simple_rt(ctx: Context):
@@ -10,24 +16,27 @@ def simple_rt(ctx: Context):
 
     stim = TextStim(ctx.win)
 
-    @(ctx.Scene(stim).close_on("space").hook("setup"))
-    def reaction():
-        stim.text = reaction.get("text")
+    @ctx.scene(duration=1, close_on="key_space")
+    def reaction(text):
+        stim.text = text
+        return stim
 
-    guide = ctx.text("Please press space when the stimulus appears.").close_on("space")
-    fixation = ctx.fixation(duration=1)  # create a fixation cross
-    blank = ctx.blank()  # create a blank screen
+    guide = ctx.text("Please press space when the stimulus appears.").config(
+        close_on="key_space"
+    )
+    fixation = ctx.fixation(duration=1)
+    blank = ctx.blank()
 
     guide.show()
-    for text in ctx.handler:
+    for text in handler:
         fixation.show()
-        blank.show(duration=random.random())
+        blank.config(duration=random.random()).show()
         reaction.show(text=text)
-        ctx.addLine(
-            text=text,
-            rt=reaction.get("response_time") - reaction.get("show_time"),
+        evts: list[Event] = reaction.get("events")
+        ctx.addRow(
+            text=str(text),
+            rt=evts[-1].timestamp - reaction.get("show_time") if evts else "",
         )
-    return ctx.expHandler.getAllEntries()
 
 
 def identification_rt(ctx: Context):
@@ -40,30 +49,32 @@ def identification_rt(ctx: Context):
     colors = ["red", "green"]
     stim = TextStim(ctx.win)
 
-    @(ctx.Scene(stim).close_on("space").hook("setup"))
-    def reaction():
-        stim.text = reaction.get("text")
-        stim.color = reaction.get("color")
+    @ctx.scene(duration=1, close_on="key_space")
+    def reaction(text, color):
+        stim.text = text
+        stim.color = color
+        return stim
 
-    guide = ctx.text("Please press space when the green stimulus appears.").close_on(
-        "space"
+    guide = ctx.text("Please press space when the green stimulus appears.").config(
+        close_on="key_space"
     )
     fixation = ctx.fixation(duration=1)
     blank = ctx.blank()
 
     guide.show()
-    for text in ctx.handler:
+    for text in handler:
         color = random.choice(colors)
 
         fixation.show()
-        blank.show(duration=random.random())
+        blank.config(duration=random.random()).show()
         reaction.show(text=text, color=color)
-        ctx.addLine(
-            text=text,
+
+        evts: list[Event] = reaction.get("events")
+        ctx.addRow(
+            text=str(text),
             color=color,
-            rt=reaction.get("response_time") - reaction.get("show_time"),
+            rt=evts[-1].timestamp - reaction.get("show_time") if evts else "",
         )
-    return ctx.expHandler.getAllEntries()
 
 
 def selection_rt(ctx: Context):
@@ -76,32 +87,33 @@ def selection_rt(ctx: Context):
     key_color_map = {"f": "green", "j": "red"}
     stim = TextStim(ctx.win)
 
-    @(ctx.Scene(stim).close_on(*key_color_map.keys()).hook("setup"))
-    def reaction():
-        stim.text = reaction.get("text")
-        stim.color = reaction.get("color")
+    @ctx.scene(duration=1, close_on=(f"key_{k}" for k in key_color_map.keys()))
+    def reaction(text, color):
+        stim.text = text
+        stim.color = color
+        return stim
 
     guide = ctx.text(
-        "Please"
+        "Please "
         + "\n".join(
             f"press {k} when the {v} stimulus appears."
             for k, v in key_color_map.items()
         )
-    ).close_on("space")
+    ).config(close_on="key_space")
     fixation = ctx.fixation(duration=1)
     blank = ctx.blank()
 
     guide.show()
-    for text in ctx.handler:
+    for text in handler:
         color = random.choice([*key_color_map.values()])
 
         fixation.show()
-        blank.show(duration=random.random())
+        blank.config(duration=random.random()).show()
         reaction.show(text=text, color=color)
-        ctx.addLine(
-            text=text,
+        evts: list[Event] = reaction.get("events")
+        ctx.addRow(
+            text=str(text),
             color=color,
-            rt=reaction.get("response_time") - reaction.get("show_time"),
-            correct=key_color_map[reaction.get("keys")[0].value] == color,
+            rt=evts[-1].timestamp - reaction.get("show_time") if evts else "",
+            correct=key_color_map[evts[-1].key.value] == color if evts else "",  # type: ignore
         )
-    return ctx.expHandler.getAllEntries()

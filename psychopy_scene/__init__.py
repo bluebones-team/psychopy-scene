@@ -1,154 +1,120 @@
-from typing import Any, Callable, Generic, Literal, Protocol, TypeVar
-from typing_extensions import Self
-from dataclasses import dataclass
-from psychopy import core, logging
-from psychopy.visual import Window
+from collections.abc import Iterable
+import re
+from typing import Any, Callable, Generic, ParamSpec, Protocol
+from psychopy import core
+from psychopy.visual import Window, TextStim
 from psychopy.hardware.keyboard import Keyboard, KeyPress
 from psychopy.event import Mouse
 from psychopy.data import ExperimentHandler
 
-T = TypeVar("T", bound="EventEmitter")
+SP = ParamSpec("SP")
+P = ParamSpec("P")
 
 
-@dataclass
-class Event(Generic[T]):
-    target: T
-    """who emitted this event"""
-    keys: list[str | KeyPress]
-    """captured keys"""
+class Event:
+    def __init__(self, key: str | KeyPress):
+        self.key = key
+        self.timestamp = core.getTime()
 
 
-class Listener(Protocol, Generic[T]):
-    def __call__(self, e: Event[T]) -> Any: ...
-class EventEmitter:
-    __mouse_key_map = {"mouse_left": 0, "mouse_middle": 1, "mouse_right": 2}
+class Callback(Protocol):
+    def __call__(self) -> Any: ...
+class PubSub:
+    __callback_regex = r"^scene_(setup|drawn|frame)|mouse_(left|middle|right)|key_(any|(num_)?(\d|[a-z]+))$"
 
-    def __init__(self, kbd: Keyboard, mouse: Mouse):
-        self.kbd = kbd
-        self.mouse = mouse
-        self.listeners: dict[str, Listener[Self]] = {}
+    def __init__(self, callbacks: dict[str, Callback]):
+        self.callbacks: dict[str, Callback] = {}
+        for k, v in callbacks.items():
+            self.on(k, v)
 
-    def on(self, **kfs: Listener[Self]):
-        """
-        add listeners for keys, includes keyboard keys and mouse buttons.
-
-        keyborad keys: the return value of `keyboard.getKeys()`,
-        mouse buttons: `mouse_left`, `mouse_middle`, `mouse_right`
-
-        Example:
-        >>> self.on(
-        ...     space=lambda e: print(f"space key is pressed, keys: {e.keys}"),
-        ...     mouse_left=lambda e: print(f"mouse left button is pressed, keys: {e.keys}"),
-        ... )
-        """
-        self.listeners.update(kfs)
+    def on(self, name: str, callback: Callback):
+        """add callback by name, raise if name is already defined"""
+        cb = self.callbacks.get(name)
+        if cb is not None:
+            raise Exception(f"{name} is already defined")
+        if re.fullmatch(PubSub.__callback_regex, name) is None:
+            raise ValueError(f"{name} is not a valid callback name")
+        if not callable(callback):
+            raise TypeError(f"{callback} should be a callable, but got {type(v)}")
+        self.callbacks[name] = callback
         return self
 
-    def off(self, **kfs: Listener[Self]):
-        """remove listeners for keys"""
-        for k in kfs:
-            if k in self.listeners:
-                del self.listeners[k]
-            else:
-                raise KeyError(f"{k} is not in listeners")
+    def off(self, name: str):
+        self.callbacks.pop(name)
         return self
 
-    def emit(self, keys: list[str | KeyPress]):
-        """emit an event with captured keys"""
-        if self.listeners and keys:
-            for key, listener in self.listeners.items():
-                if key == "_" or key in keys:
-                    listener(Event(self, keys))
+    def emit(self, name: str):
+        """emit callback by name"""
+        cb = self.callbacks.get(name)
+        if cb is not None:
+            cb()
         return self
 
-    def clearEvents(self):
-        """clear all captured events"""
-        self.kbd.clearEvents()
-        self.mouse.clickReset()
 
-    def listen(self):
-        """listen to keyboard and mouse events"""
-        kbd_keys: list[KeyPress] = self.kbd.getKeys()
-        buttons: list[int] = self.mouse.getPressed()  # type: ignore
-        mouse_keys = [k for k, v in self.__mouse_key_map.items() if buttons[v] == 1]
-        self.emit(kbd_keys + mouse_keys)
-
-
-class StateManager:
+class DataCollector:
     def __init__(self):
-        self.state: dict[str, Any] = {}
+        self.data: dict[str, Any] = {}
 
     def get(self, key: str):
-        """get state. if value is `None`, raise `KeyError`.
+        """get data. if value is `None`, raise `KeyError`.
 
-        if you want to process `None` manually, use `self.state.get()` instead."""
-        value = self.state.get(key)
+        if you want to process `None` manually, use `self.data.get()` instead."""
+        value = self.data.get(key)
         if value is None:
-            raise KeyError(f"{key} is not in self.state")
+            raise KeyError(f"{key} is not in self.data")
         return value
 
-    def set(self, **kwargs):
-        """set state
-
-        Example:
-        >>> self.set(rt=1.1, correct=True, stim="A")"""
-        self.state.update(kwargs)
+    def set(self, key: str, value):
+        """set data"""
+        self.data[key] = value
         return self
-
-    def reset(self):
-        """reset state"""
-        self.state.clear()
-        return self
-
-
-class Lifecycle:
-    Stage = Literal["setup", "drawn", "frame"]
-
-    def __init__(self):
-        self.lifecycles: dict[Lifecycle.Stage, list[Callable[[], Any]]] = {
-            "setup": [],
-            "drawn": [],
-            "frame": [],
-        }
-
-    def hook(self, stage: "Lifecycle.Stage") -> Callable[[Callable[[], Any]], Self]:
-        """add lifecycle hook
-
-        Example:
-        >>> self.hook("setup")(lambda: print("setup stage is called"))
-        >>> @(self.hook("setup"))
-        ... def _():
-        ...     print("setup stage is called")
-        """
-        if stage not in self.lifecycles:
-            raise KeyError(f"expected one of {self.lifecycles.keys()}, but got {stage}")
-        return lambda task: self.lifecycles[stage].append(task) or self
-
-    def run_hooks(self, stage: "Lifecycle.Stage"):
-        """execute lifecycle hooks"""
-        logging.debug(f"emit {stage} hook")
-        for task in self.lifecycles[stage]:
-            task()
-        return self
-
-
-class Env(Protocol):
-    win: Window
-    kbd: Keyboard
-    mouse: Mouse
 
 
 class Drawable(Protocol):
     def draw(self) -> Any: ...
-class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
-    def __init__(self, env: Env, drawables: list[Drawable]):
-        """draw stimulus and handle keyboard and mouse interaction"""
-        EventEmitter.__init__(self, env.kbd, env.mouse)
-        StateManager.__init__(self)
-        Lifecycle.__init__(self)
+class Scene(Generic[SP], DataCollector, PubSub):
+    __mouse_key_map = {"left": 0, "middle": 1, "right": 2}
+    duration: float | None = None
+    drawables: Iterable[Drawable] = []
+
+    def __init__(self, env: "Context"):
+        DataCollector.__init__(self)
+        PubSub.__init__(self, {})
         self.win = env.win
-        self.drawables = drawables
-        self.__has_showed = False
+        self.kbd = env.kbd
+        self.mouse = env.mouse
+        self.__is_showing = False
+        self.config()
+
+    def __call__(self, setup: Callable[P, Drawable | Iterable[Drawable]]) -> "Scene[P]":
+        return self.on("scene_setup", setup)  # type: ignore
+
+    def config(
+        self,
+        duration: float | None = None,
+        close_on: str | Iterable[str] | None = None,
+        **callbacks: Callback,
+    ):
+        """configure the scene
+
+        :param duration: duration of the scene in seconds.
+        :param close_on: a iterable of event names to close the scene.
+
+        Example:
+        >>> scene.config(duration=1, close_on=["key_escape", "mouse_left"])
+        """
+        if duration is not None:
+            self.duration = duration
+        if close_on:
+            if isinstance(close_on, str):
+                close_on = (close_on,)
+            for k in close_on:
+                self.on(k, self.close)
+        for k, v in callbacks.items():
+            if not k.startswith("on_"):
+                raise ValueError(f"{k} should start with 'on_'")
+            self.on(k[3:], v)
+        return self  # type: ignore
 
     def draw(self):
         """draw all self.drawables"""
@@ -156,157 +122,88 @@ class Showable(EventEmitter, StateManager, Lifecycle, Drawable):
             drawable.draw()
         return self
 
-    def show(self, **inital_state):
-        """initlize state and show the scene"""
-        if self.__has_showed:
+    def show(self, *args: SP.args, **kwargs: SP.kwargs):
+        """show the scene with stimulus params"""
+        if self.__is_showing:
             raise Exception(f"{self.__class__.__name__} is showing")
-        self.__has_showed = True
-        logging.debug("initialization")
-        self.reset().set(**inital_state)
-        self.clearEvents()
-        self.run_hooks("setup")
-        logging.debug("first draw")
-        self.draw().win.flip()  # first draw
-        self.set(show_time=core.getTime())
-        self.run_hooks("drawn")
-        while self.__has_showed:
-            self.run_hooks("frame")
-            self.draw().win.flip()  # redraw
-            self.listen()
+        self.__is_showing = True
+        self.data = {}
+        self.kbd.clearEvents()
+        self.mouse.clickReset()
+        # emit on_scene_setup
+        cb = self.callbacks.get("scene_setup")
+        if cb is None:
+            raise Exception(f"on_scene_setup is not defined")
+        results = cb(*args, **kwargs)
+        if results is None:
+            raise Exception(f"on_scene_setup should return drawables")
+        self.drawables = results if isinstance(results, Iterable) else (results,)
+        # first draw
+        self.draw().win.flip()
+        self.set("show_time", core.getTime())
+        self.emit("scene_drawn")
+        # capture interaction events
+        events = []
+        self.set("events", events)
+        while self.__is_showing:
+            # redraw
+            self.emit("scene_frame")
+            self.draw().win.flip()
+            # listen to keyboard and mouse events
+            buttons = self.mouse.getPressed()
+            for k in self.kbd.getKeys():
+                events.append(Event(k))
+                self.emit(f"key_{k.value}")
+                self.emit("key_any")
+            for k, v in self.__mouse_key_map.items():
+                if buttons[v] == 1:
+                    events.append(Event(k))
+                    self.emit(f"mouse_{k}")
+            if (
+                self.duration is not None
+                and core.getTime() - self.get("show_time") >= self.duration
+            ):
+                self.close()
         return self
 
     def close(self):
-        if not self.__has_showed:
+        if not self.__is_showing:
             raise Exception(f"{self.__class__.__name__} is closed")
-        self.__has_showed = False
-        self.set(close_time=core.getTime())
+        self.__is_showing = False
         return self
 
 
-class Scene(Showable):
-    def __time_checker(self):
-        if core.getTime() - self.get("show_time") >= self.get("duration"):
-            self.close()
-
-    def duration(self, duration: float | None = None):
-        """
-        close the scene when the duration is over, shouldn't be called twice
-
-        Example:
-        >>> self.duration(3)  # close the scene after 3 seconds
-        >>> self.duration()  # should set duration state when called show method
-        ... self.show(duration=3)"""
-        if self.__time_checker in self.lifecycles["frame"]:
-            raise Exception("duration shouldn't be multiple called")
-        if duration is not None:
-            self.hook("setup")(lambda: self.set(duration=duration))
-        self.hook("frame")(self.__time_checker)
-        return self
-
-    def close_on(self, *keys: str):
-        """close when keys are pressed, log pressed keys and response time
-
-        Example:
-        >>> self.close_on("space", "escape")"""
-        cbs: dict[str, Listener[Self]] = {
-            key: lambda e: self.set(keys=e.keys, response_time=core.getTime()).close()
-            for key in keys
-        }
-        self.on(**cbs)
-        return self
-
-
-class SceneTool(Env):
-    def __init__(self, win: Window, kbd: Keyboard, mouse: Mouse):
-        self.win = win
-        self.kbd = kbd
-        self.mouse = mouse
-
-    def Scene(
-        self,
-        drawables: Drawable | list[Drawable] | None = None,
-        *deprecated_args: Drawable,
-    ):
-        """create a scene
-
-        Example:
-        >>> self.Scene(stim)
-        >>> self.Scene([stim1, stim2])"""
-        drawables = (
-            drawables
-            if isinstance(drawables, list)
-            else [drawables] if drawables is not None else []
-        )
-        if deprecated_args:
-            drawables.extend(deprecated_args)
-            logging.warning(
-                "ctx.Scene(stim1, stim2, ...) will be deprecated in psychopy_scene>=0.1.0rc2 version. Please pass multiple stimuli through a Iterable object: ctx.Scene([stim1, stim2, ...])"
-            )
-        return Scene(self, drawables)
-
-    def text(self, *args, **kwargs):
-        """create a text scene quickly"""
-        from psychopy.visual import TextStim
-
-        return self.Scene(TextStim(self.win, *args, **kwargs))
-
-    def fixation(self, duration: float | None = None):
-        """create a fixation cross"""
-        return self.text("+").duration(duration)
-
-    def blank(self, duration: float | None = None):
-        """create a blank screen"""
-        return self.text("").duration(duration)
-
-
-class IterableHandler(Protocol):
-    def setExp(self, exp: ExperimentHandler): ...
-    def __iter__(self) -> Self: ...
-    def __next__(self) -> Any: ...
-class ResponseHandler(IterableHandler):
-    def addResponse(self, response): ...
-class DataHandler:
-    def __init__(
-        self,
-        handler: IterableHandler | None = None,
-        expHandler: ExperimentHandler | None = None,
-    ):
-        self.__handler = handler
-        self.expHandler = expHandler or ExperimentHandler()
-        if self.__handler is not None:
-            self.__handler.setExp(self.expHandler)
-
-    @property
-    def handler(self):
-        """assert the handler is not None and return it, otherwise raise an exception"""
-        if self.__handler is None:
-            raise Exception("handler should be set")
-        return self.__handler
-
-    @property
-    def responseHandler(self) -> ResponseHandler:
-        """assert the handler has addResponse method and return it, otherwise raise an exception"""
-        handler = self.handler
-        if not hasattr(handler, "addResponse"):
-            raise Exception("handler should has addResponse method")
-        return handler  # type: ignore
-
-    def addLine(self, **kwargs: float | str):
-        """add a row to the data"""
-        for k, v in kwargs.items():
-            self.expHandler.addData(k, v)
-        self.expHandler.nextEntry()
-
-
-class Context(SceneTool, DataHandler):
+class Context:
     def __init__(
         self,
         win: Window,
         kbd: Keyboard | None = None,
         mouse: Mouse | None = None,
-        handler: IterableHandler | None = None,
-        expHandler: ExperimentHandler | None = None,
+        exp: ExperimentHandler | None = None,
     ):
-        """shared parameters for each task"""
-        SceneTool.__init__(self, win, kbd or Keyboard(), mouse or Mouse(win))
-        DataHandler.__init__(self, handler, expHandler)
+        """global parameters for each task"""
+        self.win = win
+        self.kbd = kbd or Keyboard()
+        self.mouse = mouse or Mouse(win)
+        self.exp = exp or ExperimentHandler()
+
+    @property
+    def scene(self):
+        return Scene(self).config
+
+    def text(self, *args, **kwargs):
+        """create static text scene quickly"""
+        stim = TextStim(self.win, *args, **kwargs)
+        return self.scene()(lambda: stim)
+
+    def fixation(self, duration: float | None = None):
+        return self.text("+").config(duration=duration)
+
+    def blank(self, duration: float | None = None):
+        return self.text("").config(duration=duration)
+
+    def addRow(self, **kwargs: float | str | bool):
+        """add a row to the data"""
+        for k, v in kwargs.items():
+            self.exp.addData(k, v)
+        self.exp.nextEntry()
