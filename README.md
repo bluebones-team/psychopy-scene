@@ -5,7 +5,7 @@
 
 English | [简体中文](README-zh.md)
 
-This project is a lightweight experiment framework for [PsychoPy](https://github.com/psychopy/psychopy), source code **<300 lines**.
+This project is a lightweight experiment framework for [PsychoPy](https://github.com/psychopy/psychopy), source code only **200 lines**.
 
 > [!NOTE]
 > this project aim to provide a new way to build PsychoPy experiments, only provide the basic API and encourage developers to develop on top of this project.
@@ -24,18 +24,19 @@ pip install psychopy-scene
 
 or copy the `psychopy_scene` folder directly to the root directory of your project.
 
-## Usage
+## Get Started
 
 ### Context
 
 Experiment context `Context` means this experiment's global settings,
-including environment parameters, task parameters, and so on.
+including environment parameters and task parameters.
 The first step to writing an experiment is to create an experiment context.
 
 ```python
 from psychopy_scene import Context
 from psychopy.visual import Window
 from psychopy.monitors import Monitor
+from psychopy.data import ExperimentHandler
 
 # create monitor
 monitor = Monitor(
@@ -54,233 +55,140 @@ win = Window(
 )
 
 # create experiment context
-ctx = Context(win)
+ctx = Context(
+    win,
+    exp=ExperimentHandler(extraInfo={"subject": "test"}),
+)
 ```
 
 ### Scene
 
-The experiment can be seen as a composition of a series of scenes `Scene`,
+The experiment can be seen as a composition of a series of scenes,
 only 2 steps are required to write an experiment program:
 
 1. create scene
 2. write scene presentation logic
 
-we can pass several stimuli to be drawn directly into
-the `Scene` method, and these stimuli will be drawn automatically:
+scene provides some configuration parameters:
+
+- `duration`：seconds unit
+- `close_on`：the [event](#event) to close scene, such as `key_f` means pressing the `f` key to close the scene
+- `on_key_[name]`：when the keyboard key is pressed, execute the function
+- `on_mouse_[name]`：when the mouse button is clicked, execute the function
+- `on_scene_[name]`：when the scene reaches a specific stage, execute the function
+
+Creating a scene only requires a function that accepts stimulus parameters and returns the stimulus:
 
 ```python
 from psychopy.visual import TextStim
 
 # create stimulus
-stim_1 = TextStim(win, text="Hello")
-stim_2 = TextStim(win, text="World")
+stim_1 = TextStim(ctx.win, text="Hello")
+stim_2 = TextStim(ctx.win, text="World")
+
 # create scene
-scene = ctx.Scene(stim_1) # draw stim_1
-scene = ctx.Scene([stim_1, stim_2]) # draw stim_1 and stim_2
+@ctx.scene(
+    duration=1,
+    close_on=["key_f", "mouse_right"],
+    on_key_escape=lambda: print("escape key was pressed"),
+    on_mouse_left=lambda: print("left mouse button was pressed"),
+    on_scene_drawn=lambda: print("it will be called after first drawing"),
+    on_scene_frame=lambda: print("it will be called each frame"),
+)
+def demo(color: str, ori: float): # it will be used as on_scene_setup
+    print('it will be called before first drawing')
+    stim_1.color = color
+    stim_2.ori = ori
+    return stim_1, stim_2
+
 # show scene
-scene.show()
+demo.show(color="red", ori=45)
 ```
 
-The scene has 2 configuration methods, each method should be called once.
-`duration` method sets the duration of the scene,
-`close_on` method sets the [keys](#keys) to close the scene,
+scene can also be configured dynamically, it is useful in some cases, such as presentations with variable duration:
 
 ```python
-scene = ctx.Scene(stim).duration(1).close_on("f", 'j')
+@ctx.scene()
+def demo():
+    return stim
+demo.config(duration=0.5).show()
 ```
 
-The duration of some scenes isn't fixed,
-so we can set its duration dynamically by [state management](#state-management):
+this `ctx.scene` method is a shortcut for `demo.config`, so they are equivalent.
+
+### Event
+
+An event represents a specific moment in the program's running, such as pressing a key or clicking the mouse.
+To execute some operation when an event occurs, we need to add a callback function for it:
 
 ```python
-scene = ctx.Scene(stim).duration()
-scene.show(duration=1)
-```
-
-> [!CAUTION]
-> error example of configuring scene:
->
-> ```python
-> scene = ctx.Scene(stim).duration(1).duration(2)
-> ```
->
-> ```python
-> scene_1 = ctx.Scene(stim).duration(1)
-> scene_2 = scene_1.close_on("f", 'j')
-> ```
-
-Different scenes may draw the same type of stimulus,
-such as guide and end scenes need to draw text stimulus.
-In this case, we only need to create 1 text stimulus,
-then use the `hook` method to add a custom function to a specific stage of the scene,
-this function is named [lifecycle](#lifecycle) hook.
-In the following example,
-the guide and end scenes will show different text,
-but they use the same stimulus. Because the hook is added to the `setup` stage will be called before the first draw.
-
-```python
-# this is equivalent to:
-# guide = ctx.Scene(stim).hook('setup')(lambda: stim.text = "Welcome to the experiment")
-@(ctx.Scene(stim).hook('setup'))
-def guide():
-    # change stimulus parameters before first drawing
-    stim.text = "Welcome to the experiment"
-
-@(ctx.Scene(stim).hook('setup'))
-def end():
-    # change stimulus parameters again, becasue this scene will show another text
-    stim.text = "Thanks for your participation"
-
-guide.show()
-end.show()
-```
-
-In this way, we can draw stimlus flexibly.
-if we want to draw dynamic stimuli, just add a lifecycle hook to the `frame` stage:
-
-```python
-from psychopy import core
-
-@(ctx.Scene(stim).hook('frame'))
-def scene():
-    stim.text = f"Current time is {core.getTime()}"
-
-scene.show()
-```
-
-### State Management
-
-Always, we need to show a series of scenes with the same type of stimulus but different content.
-In this case, we can use these kinds of parameters that will be changed
-in each show as the **state** of the scene:
-
-```python
-@(ctx.Scene(stim).duration(0.1).hook('setup'))
-def scene():
-    stim.text = scene.get("text") # get `text` state
-
-for instensity in ['A', 'B', 'C']:
-    scene.show(text=instensity) # set `text` state and show
+demo = ctx.scene(close_on="key_f") # or
+demo = ctx.scene(on_key_f=lambda: demo.close()) # or
+demo = ctx.scene().on("key_f", lambda: demo.close())
 ```
 
 > [!NOTE]
-> the `show` method will **reset state** during
-> its initialization phase at each call. See [lifecycle](#lifecycle) for details.
+> each event can only have one callback function, adding repeatedly will raise an error.
 
-#### Built-in State
+each callback parameter name should follow the format `on_[type]_[name]`.
+Now we support the following events:
 
-Some states will be set automatically by the configured method of the scene.
+| type  | name                                                      |
+| ----- | --------------------------------------------------------- |
+| scene | setup、drawn、frame                                       |
+| key   | any、other keys is same as returned by `Keyboard.getKeys` |
+| mouse | left、right、middle                                       |
 
-| State         | Description                           | Which method |
-| ------------- | ------------------------------------- | ------------ |
-| show_time     | timestamp of the start of the display | show         |
-| close_time    | timestamp of the end of the display   | show         |
-| duration      | duration                              | duration     |
-| keys          | pressed keys                          | close_on     |
-| response_time | timestamp of key press                | close_on     |
-
-### Handle Interaction
-
-In most cases, using `close_on` method to configure the keys to close the scene is enough.
-However, if we want to do other things when the keys are pressed,
-we can use the `on` method to add custom functions for different keys.
-These functions are named event listeners, ref [wiki](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern):
-
-```python
-
-# add listener for keys, listener will be executed when the corresponding key is pressed
-ctx.Scene().on(
-    space=lambda e: print(f"space key was pressed, this event is: {e}"),
-    mouse_left=lambda e: print(f"left mouse button was pressed, this event is: {e}"),
-)
-```
-
-Note that one key with one listener, the last listener will cover the previous listeners:
-
-```python
-# only the last listener will be emitted when multiple listeners are added for the same key
-ctx.Scene().on(
-    space=lambda e: print("this listener won't be executed")
-).on(
-    space=lambda e: print("this listener will be executed")
-)
-
-# when `f` is pressed, the scene won't be closed
-ctx.Scene().close_on("f", "j").on(
-    f=lambda e: print("this listener will cover `close_on` listener")
-)
-```
-
-Every listener function should accept an event object as parameter `e`,
-which includes the scene that emits the event and the pressed keys
-
-```python
-ctx.Scene().on(
-    space=lambda e: print(f"this scene is: {e.target}; pressed keys are: {e.keys}")
-)
-```
-
-#### Keys
-
-- keyboard: same as the return value of `keyboard.getKeys()`
-- mouse: `mouse_left`、`mouse_right`、`mouse_middle`
-
-### Data Collection
-
-PsychoPy's recommended way of collecting experimental data is to use `ExperimentHandler`.
-Now we can use `ctx.addLine` for data collection,
-and access the `ExperimentHandler` object via `ctx.expHandler`.
-
-```python
-# it will call `ctx.expHandler.addData` and `ctx.expHandler.nextEntry` automatically
-ctx.addLine(correct=..., rt=...)
-```
-
-As stated in the [State Management](#state-management) section,
-some interaction data are automatically collected by `close_on`.
-If we use the `close_on` method, we can access these states after the `show` method is executed:
-
-```python
-scene = ctx.Scene().close_on("f", "j")
-scene.show()
-
-keys = scene.get("keys") # KeyPress or str
-response_time = scene.get("response_time") # float
-```
-
-Of course, we can also add listeners manually
-as in the [Handle Interaction](#handle-interaction) section:
-
-```python
-scene = ctx.Scene().on(space=lambda e: scene.set(rt=core.getTime() - scene.get("show_time")))
-scene.show()
-
-rt = scene.get("rt") # float
-```
-
-### Lifecycle
-
-There are a series of steps involved
-in drawing a picture to the screen using the `show` method:
-Resetting and initializing the state, clearing the event buffer,
-drawing the stimulus, recording the start of the display time, and so on,
-this entire process is named the lifecycle of the scene.
-During this process, lifecycle hooks are executed at the same time,
-allowing us to perform some custom actions at specific stages of the screen showing process.
-
-| Stage | Execution Timing  | Common Usage                 |
-| ----- | ----------------- | ---------------------------- |
-| setup | before first draw | set stimulus parameters      |
-| drawn | after first draw  | execute time-consuming tasks |
-| frame | every frame       | update stimulus parameters   |
-
-Illustration of the lifecycle:
+these events will be triggered in the following order after the `show` method is executed:
 
 ```mermaid
 graph TD
-Initialize --> setup-stage --> First-draw --> drawn-stage --> c{should it show ?}
-c -->|no| Close
-c -->|yes| frame-stage --> Redraw --> Listen-interaction --> c
+initialize --> on_scene_setup --> first-draw --> on_scene_drawn --> c{whether to draw}
+c -->|no| stop-draw
+c -->|yes| on_scene_frame --> re-draw --> _["on_key_[name]<br>on_mouse_[name]"] --> c
+```
+
+### Data
+
+scene will collect data automatically in showing:
+| name | description |
+| --------- | ---------------------------- |
+| show_time | first drawing timestamp |
+| events | interaction events list: keyboard events and mouse events |
+
+we can access these data by `scene.get`:
+
+```python
+@ctx.scene(close_on=["key_f", "key_j"])
+def demo():
+    return stim
+demo.show()
+close_event = demo.get("events")[-1]
+close_key = close_event.key.value
+close_time = close_event.timestamp - demo.get('show_time')
+```
+
+we can also collect data manually:
+
+```python
+@ctx.scene(
+    on_key_f=lambda: demo.set('rt', core.getTime() - demo.get('show_time')),
+)
+def demo():
+    return stim
+demo.show()
+rt = demo.get('rt')
+```
+
+## Shortcut
+
+`Context` also provides some shortcut methods：
+
+```python
+ctx.text('Welcome to the experiment!', pos=(0, 0)).show() # show static text
+ctx.fixation(1).show()
+ctx.blank(1).show()
+ctx.addRow(a='', b=1, c=True) # collect data to ExperimentHandler
 ```
 
 ## Best Practices
@@ -299,9 +207,9 @@ def task(ctx: Context, duration: float):
     from psychopy.visual import TextStim
 
     stim = TextStim(ctx.win, text="")
-    scene = ctx.Scene(stim).duration(duration)
+    scene = ctx.scene(duration, on_scene_setup=lambda: stim)
     scene.show()
-    return ctx.expHandler.getAllEntries()
+    ctx.addRow(time=scene.get('show_time'))
 ```
 
 ### Focus only on task-related logic
@@ -325,67 +233,16 @@ def task(ctx: Context):
     from psychopy.visual import TextStim
 
     stim = TextStim(ctx.win, text="")
-    scene = ctx.Scene(stim).duration(0.2)
+    scene = ctx.scene(1, on_scene_setup=lambda: stim)
     scene.show()
-    return ctx.expHandler.getAllEntries()
+    ctx.addRow(time=scene.get('show_time'))
 
 win = Window()
 data = []
 for block_index in range(10):
     ctx = Context(win)
-    ctx.expHandler.extraInfo['block_index'] = block_index
-    block_data = task(ctx)
+    ctx.exp.extraInfo['block_index'] = block_index
+    task(ctx)
+    block_data = ctx.exp.getAllEntries()
     data.extends(block_data)
 ```
-
-### Separate of TrialHandler and task
-
-Thanks to PsychoPy's encapsulation, we can easily control the next trial.
-
-```python
-from psychopy.data import TrialHandler
-
-handler = TrialHandler(trialsList=['A', 'B', 'C'], nReps=1, nTrials=10)
-for trial in handler:
-    trial # except: 'A" or 'B' or 'C'
-```
-
-For the separation of the trial iterator from the task function,
-the library provides the `ctx.handler` property.
-It can be used to control the next trial and collect trial-related data into `ctx.expHandler`.
-All we need to do is set the `handler` parameter when creating the context.
-
-```python
-from psychopy_scene import Context
-from psychopy.visual import Window
-from psychopy.data import TrialHandler
-
-def task(ctx: Context):
-    from psychopy.visual import TextStim
-
-    stim = TextStim(ctx.win, text="")
-    @(ctx.Scene(stim).duration(0.2).hook('setup'))
-    def scene():
-        stim.text = scene.get("text")
-    for instensity in ctx.handler:
-        scene.show(text=instensity)
-    return ctx.expHandler.getAllEntries()
-
-ctx = Context(
-    Window(),
-    handler=TrialHandler(trialsList=['A', 'B', 'C'], nReps=1, nTrials=10),
-)
-data = task(ctx)
-```
-
-However, when we intend to use `StairHandler` and access `ctx.handler.addResponse`,
-the Pylance type checker will report an error,
-even though `ctx.handler` is a `StairHandler` object.
-This is because `ctx.handler` does not have an `addResponse` method of type `ctx.handler`.
-To work around this, we can use `ctx.responseHandler` instead of `ctx.handler`.
-
-> [!WARNING]
-> If the `ctx.handler` does not have an `addResponse` method at runtime,
-> accessing `ctx.responseHandler` will throw an exception.
-> So make sure the `handler` parameter passed in
-> has an `addResponse` method when using `ctx.responseHandler`.
